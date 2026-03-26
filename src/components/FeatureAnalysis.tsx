@@ -1,17 +1,29 @@
 import type { AiAnalysis } from '../types'
 
+type ProcessedMeetingItem = {
+  id: number
+  title: string
+  processedAt: string
+}
+
 type FeatureAnalysisProps = {
   meetingId?: number | null
+  meetingTitle?: string
   busy?: boolean
   analysis: AiAnalysis | null
+  processingStatus?: string
+  processedMeetings: ProcessedMeetingItem[]
   onStartProcessing: () => Promise<void>
   onLoadAnalysis: () => Promise<void>
 }
 
 export default function FeatureAnalysis({
   meetingId,
+  meetingTitle,
   busy,
   analysis,
+  processingStatus,
+  processedMeetings,
   onStartProcessing,
   onLoadAnalysis,
 }: FeatureAnalysisProps) {
@@ -37,6 +49,10 @@ export default function FeatureAnalysis({
           <span className="feature-chip">Meeting ID: {meetingId ?? '--'}</span>
         </header>
 
+        <div className="analysis-empty" style={{ marginBottom: 16 }}>
+          File hiện tại: {meetingTitle || 'Chưa có file'}
+        </div>
+
         <div className="analysis-kpis">
           <article className="analysis-kpi">
             <span className="analysis-kpi__label">Tổng từ khóa</span>
@@ -48,7 +64,7 @@ export default function FeatureAnalysis({
           </article>
           <article className="analysis-kpi">
             <span className="analysis-kpi__label">Trạng thái</span>
-            <strong className="analysis-kpi__value">{analysis ? 'Đã phân tích' : 'Chờ dữ liệu'}</strong>
+            <strong className="analysis-kpi__value">{processingStatus ?? (analysis ? 'DONE' : 'IDLE')}</strong>
           </article>
         </div>
 
@@ -103,6 +119,19 @@ export default function FeatureAnalysis({
         ) : (
           <div className="analysis-empty">Chưa có dữ liệu phân tích. Hãy tải file và bắt đầu xử lý.</div>
         )}
+
+        <div className="analysis-card" style={{ marginTop: 16 }}>
+          <h3>File đã xử lý xong</h3>
+          {processedMeetings.length ? (
+            <ul>
+              {processedMeetings.map((item) => (
+                <li key={item.id}>#{item.id} - {item.title}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>Chưa có file nào hoàn tất.</p>
+          )}
+        </div>
       </section>
     </section>
   )

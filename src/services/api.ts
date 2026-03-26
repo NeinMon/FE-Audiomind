@@ -28,6 +28,10 @@ export const getMeeting = async (id: number): Promise<Meeting> => {
   return fetchJson<Meeting>(`${meetingBaseUrl}/meetings/${id}`)
 }
 
+export const getMeetings = async (): Promise<Meeting[]> => {
+  return fetchJson<Meeting[]>(`${meetingBaseUrl}/meetings`)
+}
+
 export const startProcessing = async (meetingId: number) => {
   const params = new URLSearchParams({ meetingId: String(meetingId) })
   return fetchJson<Record<string, unknown>>(
@@ -49,7 +53,7 @@ export const getProcessingTranscript = async (meetingId: number) => {
 }
 
 export const getProcessingAnalysis = async (meetingId: number) => {
-  return fetchJson<Record<string, unknown>>(
+  return fetchJson<AiAnalysis>(
     `${processingBaseUrl}/processing/${meetingId}/analysis`
   )
 }

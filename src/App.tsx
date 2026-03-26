@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TopNav from './components/TopNav'
 import HeroChart from './components/HeroChart'
 import Sidebar from './components/Sidebar'
@@ -12,30 +12,65 @@ import LoginModal from './components/LoginModal'
 import StatusToast from './components/StatusToast'
 import {
   uploadMeeting,
+  getMeetings,
   startProcessing,
-  getAiAnalysis,
+  getProcessingStatus,
+  getProcessingAnalysis,
 } from './services/api'
 import type { AiAnalysis, Meeting } from './types'
+
+type ProcessedMeetingItem = {
+  id: number
+  title: string
+  processedAt: string
+}
 
 const mockUser = {
   name: 'Nguyễn Văn A',
   role: 'Học viên',
 }
 
+const meetingStorageKey = 'audiomind.currentMeeting'
+const analysisStorageKey = 'audiomind.currentAnalysis'
+const statusStorageKey = 'audiomind.processingStatus'
+const processedMeetingsStorageKey = 'audiomind.processedMeetings'
+
 const getStoredUser = () => {
   const raw = localStorage.getItem('audiomind.user')
   return raw ? (JSON.parse(raw) as typeof mockUser) : null
 }
 
+const getStoredMeeting = () => {
+  const raw = localStorage.getItem(meetingStorageKey)
+  return raw ? (JSON.parse(raw) as Meeting) : null
+}
+
+const getStoredAnalysis = () => {
+  const raw = localStorage.getItem(analysisStorageKey)
+  return raw ? (JSON.parse(raw) as AiAnalysis) : null
+}
+
+const getStoredStatus = () => localStorage.getItem(statusStorageKey) ?? 'IDLE'
+
+const getStoredProcessedMeetings = () => {
+  const raw = localStorage.getItem(processedMeetingsStorageKey)
+  return raw ? (JSON.parse(raw) as ProcessedMeetingItem[]) : []
+}
+
 export default function App() {
   const [user, setUser] = useState<typeof mockUser | null>(() => getStoredUser())
-  const [meeting, setMeeting] = useState<Meeting | null>(null)
+  const [meeting, setMeeting] = useState<Meeting | null>(() => getStoredMeeting())
   const [toast, setToast] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [activeNav, setActiveNav] = useState('Trang chủ')
   const [featureScene, setFeatureScene] = useState<'upload' | 'analysis' | 'mindmap'>('upload')
-  const [analysis, setAnalysis] = useState<AiAnalysis | null>(null)
+  const [analysis, setAnalysis] = useState<AiAnalysis | null>(() => getStoredAnalysis())
+  const [processingStatus, setProcessingStatus] = useState(() => getStoredStatus())
+  const [processedMeetings, setProcessedMeetings] = useState<ProcessedMeetingItem[]>(
+    () => getStoredProcessedMeetings()
+  )
+  const pollRunIdRef = useRef(0)
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -58,19 +93,200 @@ export default function App() {
     setActiveNav('Trang chủ')
   }, [])
 
+  const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+  useEffect(() => {
+    if (meeting) {
+      localStorage.setItem(meetingStorageKey, JSON.stringify(meeting))
+    } else {
+      localStorage.removeItem(meetingStorageKey)
+    }
+  }, [meeting])
+
+  useEffect(() => {
+    if (analysis) {
+      localStorage.setItem(analysisStorageKey, JSON.stringify(analysis))
+    } else {
+      localStorage.removeItem(analysisStorageKey)
+    }
+  }, [analysis])
+
+  useEffect(() => {
+    localStorage.setItem(statusStorageKey, processingStatus)
+  }, [processingStatus])
+
+  useEffect(() => {
+    localStorage.setItem(processedMeetingsStorageKey, JSON.stringify(processedMeetings))
+  }, [processedMeetings])
+
+  const addProcessedMeeting = useCallback((id: number, title?: string | null) => {
+    const trimmedTitle = title?.trim()
+    const safeTitle = trimmedTitle && trimmedTitle.length > 0
+      ? trimmedTitle
+      : `Meeting #${id}`
+
+    setProcessedMeetings((prev) => {
+      const next = prev.filter((item) => item.id !== id)
+      next.unshift({
+        id,
+        title: safeTitle,
+        processedAt: new Date().toISOString(),
+      })
+      return next.slice(0, 10)
+    })
+  }, [])
+
+  useEffect(() => {
+    let canceled = false
+
+    const syncRecentMeetings = async () => {
+      try {
+        const meetings = await getMeetings()
+        if (canceled || meetings.length === 0) return
+
+        const currentMeeting = meeting ?? meetings[0]
+        if (!meeting) {
+          setMeeting(currentMeeting)
+        }
+
+        const statusResults = await Promise.all(
+          meetings.map(async (item) => {
+            try {
+              const statusResponse = await getProcessingStatus(item.id)
+              return {
+                meeting: item,
+                status: String(statusResponse.status ?? 'UNKNOWN').toUpperCase(),
+              }
+            } catch (error) {
+              return {
+                meeting: item,
+                status: 'UNKNOWN',
+              }
+            }
+          })
+        )
+
+        if (canceled) return
+
+        const doneMeetings = statusResults.filter((item) => item.status === 'DONE')
+        if (doneMeetings.length > 0) {
+          doneMeetings.forEach(({ meeting: doneMeeting }) => {
+            addProcessedMeeting(doneMeeting.id, doneMeeting.title)
+          })
+
+          if (!analysis) {
+            const targetMeeting = doneMeetings[0].meeting
+            setMeeting(targetMeeting)
+            setProcessingStatus('DONE')
+            const result = await getProcessingAnalysis(targetMeeting.id)
+            if (canceled) return
+            setAnalysis(result)
+          }
+        }
+      } catch (error) {
+        if (canceled) return
+      }
+    }
+
+    void syncRecentMeetings()
+
+    return () => {
+      canceled = true
+    }
+  }, [addProcessedMeeting, analysis, meeting])
+
+  useEffect(() => {
+    if (!meeting?.id) return
+
+    let canceled = false
+    const syncCurrentMeetingStatus = async () => {
+      try {
+        const statusResponse = await getProcessingStatus(meeting.id)
+        if (canceled) return
+
+        const latestStatus = String(statusResponse.status ?? 'UNKNOWN').toUpperCase()
+        setProcessingStatus(latestStatus)
+
+        if (latestStatus === 'DONE' && !analysis) {
+          const result = await getProcessingAnalysis(meeting.id)
+          if (canceled) return
+          setAnalysis(result)
+        }
+      } catch (error) {
+        if (canceled) return
+        setProcessingStatus('UNKNOWN')
+      }
+    }
+
+    void syncCurrentMeetingStatus()
+
+    return () => {
+      canceled = true
+    }
+  }, [analysis, meeting?.id])
+
+  const pollProcessingUntilDone = useCallback(async (meetingId: number, meetingTitle?: string) => {
+    const runId = ++pollRunIdRef.current
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        const statusResponse = await getProcessingStatus(meetingId)
+        if (runId !== pollRunIdRef.current) return
+
+        const nextStatus = String(statusResponse.status ?? 'UNKNOWN').toUpperCase()
+        setProcessingStatus(nextStatus)
+
+        if (nextStatus === 'DONE') {
+          try {
+            const result = await getProcessingAnalysis(meetingId)
+            if (runId !== pollRunIdRef.current) return
+            setAnalysis(result)
+            addProcessedMeeting(meetingId, meetingTitle)
+            showToast('Xử lý hoàn tất. Đã tải kết quả phân tích.')
+          } catch (error) {
+            showToast('Xử lý hoàn tất nhưng chưa tải được phân tích. Hãy thử lại.')
+          }
+          return
+        }
+
+        if (nextStatus === 'FAILED') {
+          const errorText = typeof statusResponse.error === 'string'
+            ? statusResponse.error
+            : 'Xử lý thất bại. Vui lòng thử lại.'
+          showToast(errorText)
+          return
+        }
+      } catch (error) {
+        if (runId !== pollRunIdRef.current) return
+        showToast('Không thể kiểm tra trạng thái xử lý.')
+        return
+      }
+
+      await wait(3000)
+    }
+
+    if (runId === pollRunIdRef.current) {
+      showToast('Xử lý đang lâu hơn dự kiến, vui lòng chờ thêm.')
+    }
+  }, [addProcessedMeeting, showToast])
+
   const handleUpload = useCallback(async (title: string, file: File) => {
     setBusy(true)
     try {
       const result = await uploadMeeting(title, file)
       setMeeting(result)
       setAnalysis(null)
-      showToast(`Đã tải lên thành công: ${result.title}`)
+      setProcessingStatus('PENDING')
+      await startProcessing(result.id)
+      showToast(`Đã tải lên và bắt đầu xử lý: ${result.title}`)
+      void pollProcessingUntilDone(result.id, result.title)
     } catch (error) {
-      showToast('Không thể tải file. Vui lòng thử lại.')
+      setProcessingStatus('FAILED')
+      showToast('Không thể tải file hoặc bắt đầu xử lý. Vui lòng thử lại.')
     } finally {
       setBusy(false)
     }
-  }, [showToast])
+  }, [pollProcessingUntilDone, showToast])
 
   const handleStartProcessing = useCallback(async () => {
     if (!meeting?.id) {
@@ -80,14 +296,18 @@ export default function App() {
 
     setBusy(true)
     try {
+      setAnalysis(null)
+      setProcessingStatus('PENDING')
       await startProcessing(meeting.id)
       showToast('Đã bắt đầu xử lý ghi âm.')
+      void pollProcessingUntilDone(meeting.id, meeting.title)
     } catch (error) {
+      setProcessingStatus('FAILED')
       showToast('Không thể bắt đầu xử lý. Vui lòng thử lại.')
     } finally {
       setBusy(false)
     }
-  }, [meeting, showToast])
+  }, [meeting, pollProcessingUntilDone, showToast])
 
   const handleLoadAnalysis = useCallback(async () => {
     if (!meeting?.id) {
@@ -95,9 +315,14 @@ export default function App() {
       return
     }
 
+    if (processingStatus === 'PENDING' || processingStatus === 'RUNNING') {
+      showToast('Dữ liệu đang được xử lý. Hệ thống sẽ tự cập nhật khi hoàn tất.')
+      return
+    }
+
     setBusy(true)
     try {
-      const result = await getAiAnalysis(meeting.id)
+      const result = await getProcessingAnalysis(meeting.id)
       setAnalysis(result)
       showToast('Đã tải kết quả phân tích.')
     } catch (error) {
@@ -113,7 +338,11 @@ export default function App() {
       return 'Bạn cần tải file ghi âm để tôi tạo phân tích và mindmap.'
     }
 
-    const current = analysis ?? await getAiAnalysis(meeting.id)
+    if (processingStatus === 'PENDING' || processingStatus === 'RUNNING') {
+      return `Hệ thống đang xử lý ghi âm (trạng thái: ${processingStatus}). Tôi sẽ trả lời chi tiết ngay khi có phân tích.`
+    }
+
+    const current = analysis ?? await getProcessingAnalysis(meeting.id)
     if (!analysis) {
       setAnalysis(current)
     }
@@ -124,15 +353,18 @@ export default function App() {
       : '- Không có hành động nổi bật.'
 
     return `Câu hỏi: ${query}\n\nTóm tắt: ${current.summary}\n\nTừ khóa: ${keywords}\n\nViệc cần làm:\n${actionText}`
-  }, [analysis, meeting])
+  }, [analysis, meeting, processingStatus])
 
   const renderFeatureScene = () => {
     if (featureScene === 'analysis') {
       return (
         <FeatureAnalysis
           meetingId={meeting?.id}
+          meetingTitle={meeting?.title}
           busy={busy}
           analysis={analysis}
+          processingStatus={processingStatus}
+          processedMeetings={processedMeetings}
           onStartProcessing={handleStartProcessing}
           onLoadAnalysis={handleLoadAnalysis}
         />
