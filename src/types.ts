@@ -19,3 +19,15 @@ export type AiAnalysis = {
   action_items: ActionItem[]
   created_at: string
 }
+
+export type TranscriptSegment = {
+  speaker: string
+  start_time: number
+  end_time: number
+  text: string
+}
+
+export type TranscriptResponse = {
+  meeting_id: number
+  transcripts: TranscriptSegment[]
+}

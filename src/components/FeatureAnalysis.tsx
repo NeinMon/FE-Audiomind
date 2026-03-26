@@ -1,4 +1,6 @@
-import type { AiAnalysis } from '../types'
+import { useState } from 'react'
+import type { AiAnalysis, TranscriptResponse } from '../types'
+import AiAssistant from './AiAssistant'
 
 type ProcessedMeetingItem = {
   id: number
@@ -11,6 +13,7 @@ type FeatureAnalysisProps = {
   meetingTitle?: string
   busy?: boolean
   analysis: AiAnalysis | null
+  transcript: TranscriptResponse | null
   processingStatus?: string
   processedMeetings: ProcessedMeetingItem[]
   onStartProcessing: () => Promise<void>
@@ -22,117 +25,132 @@ export default function FeatureAnalysis({
   meetingTitle,
   busy,
   analysis,
+  transcript,
   processingStatus,
   processedMeetings,
   onStartProcessing,
   onLoadAnalysis,
 }: FeatureAnalysisProps) {
-  const keywordCount = analysis?.keywords.length ?? 0
-  const actionCount = analysis?.action_items.length ?? 0
+  const [activeTab, setActiveTab] = useState<'content' | 'model' | 'mindmap'>('content')
+
+  const title = meetingTitle || 'Thuyết trình môn AI cho các bạn sinh viên'
 
   return (
-    <section className="feature-scene feature-analysis-scene">
-      <section className="hero feature-hero feature-hero--analysis">
-        <div className="hero__search">
-          <input className="search-input" type="search" placeholder="Tìm bài giảng, môn học, ghi chú..." />
-          <span className="search-icon">⌕</span>
+    <div className="dashboard-page bg-gray-light">
+      <header className="analysis-page-header">
+        <div className="breadcrumbs">
+          <button className="back-btn">←</button>
+          <span>{title}</span>
         </div>
-        <div className="hero__content">
-          <h1>Phân tích âm thanh</h1>
-          <p>Nhận diện nội dung, tóm tắt ý chính và trích xuất danh sách hành động từ buổi ghi âm.</p>
-        </div>
-      </section>
-
-      <section className="feature-panel feature-analysis">
-        <header className="feature-panel__header">
-          <h2>Bảng điều khiển phân tích</h2>
-          <span className="feature-chip">Meeting ID: {meetingId ?? '--'}</span>
-        </header>
-
-        <div className="analysis-empty" style={{ marginBottom: 16 }}>
-          File hiện tại: {meetingTitle || 'Chưa có file'}
-        </div>
-
-        <div className="analysis-kpis">
-          <article className="analysis-kpi">
-            <span className="analysis-kpi__label">Tổng từ khóa</span>
-            <strong className="analysis-kpi__value">{keywordCount}</strong>
-          </article>
-          <article className="analysis-kpi">
-            <span className="analysis-kpi__label">Việc cần làm</span>
-            <strong className="analysis-kpi__value">{actionCount}</strong>
-          </article>
-          <article className="analysis-kpi">
-            <span className="analysis-kpi__label">Trạng thái</span>
-            <strong className="analysis-kpi__value">{processingStatus ?? (analysis ? 'DONE' : 'IDLE')}</strong>
-          </article>
-        </div>
-
-        <div className="feature-actions">
-          <button type="button" className="hero__cta" disabled={busy || !meetingId} onClick={onStartProcessing}>
-            Bắt đầu xử lý
-          </button>
-          <button type="button" className="secondary-cta" disabled={busy || !meetingId} onClick={onLoadAnalysis}>
-            Tải kết quả phân tích
+        <div className="header-actions">
+          <button className="secondary-cta" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span>⬇</span> Tải slide
           </button>
         </div>
+      </header>
 
-        {analysis ? (
-          <div className="analysis-grid">
-            <article className="analysis-card analysis-card--wide">
-              <h3>Tóm tắt</h3>
-              <p>{analysis.summary}</p>
-            </article>
-
-            <article className="analysis-card analysis-card--timeline">
-              <h3>Nhịp nội dung</h3>
-              <div className="timeline-bars" role="presentation">
-                <span style={{ height: '42%' }} />
-                <span style={{ height: '68%' }} />
-                <span style={{ height: '52%' }} />
-                <span style={{ height: '84%' }} />
-                <span style={{ height: '60%' }} />
-                <span style={{ height: '77%' }} />
-                <span style={{ height: '44%' }} />
-                <span style={{ height: '58%' }} />
+      <div className="analysis-main-content">
+        <div className="analysis-left-panel">
+          
+          <div className="audio-player-card">
+            <div className="audio-waves"></div>
+            <div className="audio-controls">
+              <button className="play-btn">⏸</button>
+              <div className="time-info">
+                <span className="time-title">thuyet-trinh.mp3</span>
+                <span className="time-duration">12:00:00</span>
               </div>
-            </article>
-
-            <article className="analysis-card">
-              <h3>Từ khóa</h3>
-              <ul>
-                {analysis.keywords.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </article>
-
-            <article className="analysis-card">
-              <h3>Việc cần làm</h3>
-              <ul>
-                {analysis.action_items.map((item, index) => (
-                  <li key={`${item.task}-${index}`}>{item.task}</li>
-                ))}
-              </ul>
-            </article>
+              <div className="audio-options">
+                <button>🔊</button>
+                <select><option>1x</option></select>
+                <button>⚙</button>
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="analysis-empty">Chưa có dữ liệu phân tích. Hãy tải file và bắt đầu xử lý.</div>
-        )}
 
-        <div className="analysis-card" style={{ marginTop: 16 }}>
-          <h3>File đã xử lý xong</h3>
-          {processedMeetings.length ? (
-            <ul>
-              {processedMeetings.map((item) => (
-                <li key={item.id}>#{item.id} - {item.title}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>Chưa có file nào hoàn tất.</p>
-          )}
+          <div className="analysis-tabs">
+            <button 
+              className={`tab-btn ${activeTab === 'content' ? 'active' : ''}`}
+              onClick={() => setActiveTab('content')}
+            >
+              Phân tích nội dung
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'model' ? 'active' : ''}`}
+              onClick={() => setActiveTab('model')}
+            >
+              Mô hình và Kiến trúc
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'mindmap' ? 'active' : ''}`}
+              onClick={() => setActiveTab('mindmap')}
+            >
+              Mindmap
+            </button>
+          </div>
+
+          <div className="doc-content">
+            {activeTab === 'mindmap' ? (
+              <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                <img src="/tính năng/mindmap_scene.png" alt="Mindmap" style={{ maxWidth: '100%', borderRadius: '8px' }} />
+              </div>
+            ) : (
+              <>
+                <h2>Nhận dạng Giọng nói và Xử lý Ngôn ngữ Tự nhiên</h2>
+                
+                <h3>1. Nhận dạng Giọng nói (Speech Recognition)</h3>
+                <p>Khái niệm: Là quá trình máy tính nhận diện và chuyển đổi giọng nói con người thành văn bản.</p>
+                <p>Ứng dụng: Trợ lý ảo (Siri, Google Assistant), hệ thống tổng đài tự động, phần mềm chuyển ngữ (dictation).</p>
+                
+                <h3>2. Xử lý Ngôn ngữ Tự nhiên (NLP)</h3>
+                <p>Khái niệm: Lĩnh vực nghiên cứu giúp máy tính hiểu, phân tích, và tạo ra ngôn ngữ của con người một cách tự nhiên.</p>
+                <p>Các ứng dụng tiêu biểu:</p>
+                <ul>
+                  <li>Dịch tự động: Google Translate.</li>
+                  <li>Phân tích cảm xúc: Xác định xem phản hồi của người dùng là tích cực, tiêu cực, hay trung lập.</li>
+                  <li>Chatbot: Trợ lý ảo giao tiếp tự nhiên như ChatGPT.</li>
+                </ul>
+                
+                {analysis && (
+                  <div style={{ marginTop: '30px', padding: '20px', background: '#f8f9fa', borderRadius: '8px' }}>
+                    <h3>Kết quả AI chi tiết:</h3>
+                    <p>{analysis.summary}</p>
+                    {analysis.keywords && <p><strong>Từ khóa:</strong> {analysis.keywords.join(', ')}</p>}
+                    {analysis.action_items && (
+                      <ul>
+                        {analysis.action_items.map((item, idx) => (
+                          <li key={idx}>{item.task}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {(!analysis && !busy) && (
+                  <div style={{ marginTop: '20px' }}>
+                    <button className="btn-primary" onClick={onStartProcessing} style={{ width: 'auto' }}>
+                      Bắt đầu xử lý báo cáo AI
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
         </div>
-      </section>
-    </section>
+        
+        <div className="analysis-right-panel">
+          <AiAssistant 
+            busy={busy}
+            meetingId={meetingId}
+            onAsk={async (msg) => {
+              return new Promise(resolve => setTimeout(() => {
+                resolve("Dưới đây là một số ý chính được tóm tắt từ bài giảng:\n- Khái niệm: Xử lý Ngôn ngữ Tự nhiên (NLP).")
+              }, 1000))
+            }}
+          />
+        </div>
+      </div>
+    </div>
   )
 }

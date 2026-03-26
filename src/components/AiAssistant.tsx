@@ -13,8 +13,12 @@ type AiAssistantProps = {
 
 const initialMessages: Message[] = [
   {
+    role: 'user',
+    text: 'Bạn có thể tóm tắt cho tôi không?'
+  },
+  {
     role: 'assistant',
-    text: 'Xin chào! Tôi là trợ lý học tập của bạn. Bạn muốn tìm hiểu phần nào?',
+    text: 'Dưới đây là một số ý chính được tóm tắt từ bài giảng:\n- Khái niệm: Xử lý Ngôn ngữ Tự nhiên (NLP).\n- Ứng dụng: Dịch văn bản tự động, chatbot...\nNếu cần, tôi có thể tạo mindmap hoặc câu hỏi trắc nghiệm.',
   },
 ]
 
@@ -58,69 +62,48 @@ export default function AiAssistant({ busy, meetingId, onAsk }: AiAssistantProps
   }
 
   return (
-    <section className="assistant">
-      <div className="assistant__header">
-        <span className="assistant__icon">🤖</span>
-        <h2>Trợ lý bài giảng AI</h2>
-        <span className="assistant__pill">Meeting ID: {meetingId ?? '--'}</span>
-      </div>
+    <>
+      <div className="assistant-header">✨ AI Assistant</div>
 
-      <div className="assistant__messages">
+      <div className="assistant-body">
         {messages.map((msg, index) => (
           <div
             key={`${msg.role}-${index}`}
-            className={`chat-bubble chat-bubble--${msg.role}`}
+            className={`msg-wrapper ${msg.role}`}
           >
-            {msg.text}
+            {msg.role === 'assistant' && (
+              <div className="msg-avatar ai">✨</div>
+            )}
+            <div className="msg-bubble" style={{ whiteSpace: 'pre-wrap' }}>
+              {msg.text}
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="assistant__preview">
-        <div className="mindmap">
-          <div className="mindmap__canvas">
-            <svg
-              className="mindmap__lines"
-              viewBox="0 0 100 60"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              <path d="M50 10 L25 28 L12 46" />
-              <path d="M50 10 L25 28 L28 48" />
-              <path d="M50 10 L75 28 L70 44" />
-              <path d="M50 10 L75 28 L88 46" />
-            </svg>
-
-            <div className="mindmap__node mindmap__node--root">Đồ án môn học</div>
-            <div className="mindmap__node mindmap__node--left">Tổng quan</div>
-            <div className="mindmap__node mindmap__node--left-bottom">Ví dụ</div>
-            <div className="mindmap__node mindmap__node--right">Quy trình</div>
-            <div className="mindmap__node mindmap__node--right-bottom">Kết luận</div>
-          </div>
-        </div>
-        <div className="chat-bubble chat-bubble--assistant">
-          Nếu bạn muốn, mình có thể vẽ sơ đồ đẹp hơn để đặt vào slide hoặc website.
+      <div className="assistant-input-area">
+        <div className="input-box">
+          <input
+            type="text"
+            placeholder="Đặt câu hỏi về nội dung..."
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') handleSend()
+            }}
+          />
+          <button type="button">🎙</button>
+          <button type="button">📎</button>
+          <button
+            type="button"
+            className="btn-send"
+            onClick={handleSend}
+            disabled={busy || sending}
+          >
+            ➤
+          </button>
         </div>
       </div>
-
-      <div className="assistant__input">
-        <input
-          type="text"
-          placeholder="Hỏi bất kỳ..."
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') handleSend()
-          }}
-        />
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={busy || sending}
-        >
-          Gửi
-        </button>
-      </div>
-    </section>
+    </>
   )
 }

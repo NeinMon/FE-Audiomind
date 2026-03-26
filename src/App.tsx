@@ -1,23 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TopNav from './components/TopNav'
 import HeroChart from './components/HeroChart'
-import Sidebar from './components/Sidebar'
-import QuickActions from './components/QuickActions'
-import AiAssistant from './components/AiAssistant'
 import FeatureUpload from './components/FeatureUpload'
 import FeatureAnalysis from './components/FeatureAnalysis'
-import FeatureMindmap from './components/FeatureMindmap'
 import NewsAbout from './components/NewsAbout'
 import LoginModal from './components/LoginModal'
 import StatusToast from './components/StatusToast'
+import DashboardLayout from './components/DashboardLayout'
+import FilesList from './components/FilesList'
+import SubjectsList from './components/SubjectsList'
 import {
-  uploadMeeting,
-  getMeetings,
-  startProcessing,
-  getProcessingStatus,
-  getProcessingAnalysis,
+  processAudio,
+  getTranscript,
+  getAnalysis,
+  uploadAudio,
 } from './services/api'
-import type { AiAnalysis, Meeting } from './types'
+import { API_BASE } from './services/config'
+import type { AiAnalysis, Meeting, TranscriptResponse } from './types'
 
 type ProcessedMeetingItem = {
   id: number
@@ -32,6 +31,7 @@ const mockUser = {
 
 const meetingStorageKey = 'audiomind.currentMeeting'
 const analysisStorageKey = 'audiomind.currentAnalysis'
+const transcriptStorageKey = 'audiomind.currentTranscript'
 const statusStorageKey = 'audiomind.processingStatus'
 const processedMeetingsStorageKey = 'audiomind.processedMeetings'
 
@@ -50,6 +50,11 @@ const getStoredAnalysis = () => {
   return raw ? (JSON.parse(raw) as AiAnalysis) : null
 }
 
+const getStoredTranscript = () => {
+  const raw = localStorage.getItem(transcriptStorageKey)
+  return raw ? (JSON.parse(raw) as TranscriptResponse) : null
+}
+
 const getStoredStatus = () => localStorage.getItem(statusStorageKey) ?? 'IDLE'
 
 const getStoredProcessedMeetings = () => {
@@ -64,8 +69,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [activeNav, setActiveNav] = useState('Trang chủ')
-  const [featureScene, setFeatureScene] = useState<'upload' | 'analysis' | 'mindmap'>('upload')
+  const [featureScene, setFeatureScene] = useState<'upload' | 'analysis' | 'mindmap' | 'files' | 'subjects'>('upload')
   const [analysis, setAnalysis] = useState<AiAnalysis | null>(() => getStoredAnalysis())
+  const [transcript, setTranscript] = useState<TranscriptResponse | null>(() => getStoredTranscript())
   const [processingStatus, setProcessingStatus] = useState(() => getStoredStatus())
   const [processedMeetings, setProcessedMeetings] = useState<ProcessedMeetingItem[]>(
     () => getStoredProcessedMeetings()
@@ -95,6 +101,11 @@ export default function App() {
 
   const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
+  const getErrorMessage = (error: unknown) => {
+    if (error instanceof Error) return error.message
+    return 'Lỗi không xác định từ API.'
+  }
+
   useEffect(() => {
     if (meeting) {
       localStorage.setItem(meetingStorageKey, JSON.stringify(meeting))
@@ -110,6 +121,14 @@ export default function App() {
       localStorage.removeItem(analysisStorageKey)
     }
   }, [analysis])
+
+  useEffect(() => {
+    if (transcript) {
+      localStorage.setItem(transcriptStorageKey, JSON.stringify(transcript))
+    } else {
+      localStorage.removeItem(transcriptStorageKey)
+    }
+  }, [transcript])
 
   useEffect(() => {
     localStorage.setItem(statusStorageKey, processingStatus)
@@ -136,157 +155,93 @@ export default function App() {
     })
   }, [])
 
-  useEffect(() => {
-    let canceled = false
-
-    const syncRecentMeetings = async () => {
-      try {
-        const meetings = await getMeetings()
-        if (canceled || meetings.length === 0) return
-
-        const currentMeeting = meeting ?? meetings[0]
-        if (!meeting) {
-          setMeeting(currentMeeting)
-        }
-
-        const statusResults = await Promise.all(
-          meetings.map(async (item) => {
-            try {
-              const statusResponse = await getProcessingStatus(item.id)
-              return {
-                meeting: item,
-                status: String(statusResponse.status ?? 'UNKNOWN').toUpperCase(),
-              }
-            } catch (error) {
-              return {
-                meeting: item,
-                status: 'UNKNOWN',
-              }
-            }
-          })
-        )
-
-        if (canceled) return
-
-        const doneMeetings = statusResults.filter((item) => item.status === 'DONE')
-        if (doneMeetings.length > 0) {
-          doneMeetings.forEach(({ meeting: doneMeeting }) => {
-            addProcessedMeeting(doneMeeting.id, doneMeeting.title)
-          })
-
-          if (!analysis) {
-            const targetMeeting = doneMeetings[0].meeting
-            setMeeting(targetMeeting)
-            setProcessingStatus('DONE')
-            const result = await getProcessingAnalysis(targetMeeting.id)
-            if (canceled) return
-            setAnalysis(result)
-          }
-        }
-      } catch (error) {
-        if (canceled) return
-      }
-    }
-
-    void syncRecentMeetings()
-
-    return () => {
-      canceled = true
-    }
-  }, [addProcessedMeeting, analysis, meeting])
-
-  useEffect(() => {
-    if (!meeting?.id) return
-
-    let canceled = false
-    const syncCurrentMeetingStatus = async () => {
-      try {
-        const statusResponse = await getProcessingStatus(meeting.id)
-        if (canceled) return
-
-        const latestStatus = String(statusResponse.status ?? 'UNKNOWN').toUpperCase()
-        setProcessingStatus(latestStatus)
-
-        if (latestStatus === 'DONE' && !analysis) {
-          const result = await getProcessingAnalysis(meeting.id)
-          if (canceled) return
-          setAnalysis(result)
-        }
-      } catch (error) {
-        if (canceled) return
-        setProcessingStatus('UNKNOWN')
-      }
-    }
-
-    void syncCurrentMeetingStatus()
-
-    return () => {
-      canceled = true
-    }
-  }, [analysis, meeting?.id])
-
   const pollProcessingUntilDone = useCallback(async (meetingId: number, meetingTitle?: string) => {
     const runId = ++pollRunIdRef.current
 
     for (let attempt = 0; attempt < 80; attempt += 1) {
       try {
-        const statusResponse = await getProcessingStatus(meetingId)
+        setProcessingStatus('FETCHING_TRANSCRIPT')
+        const transcriptResult = await getTranscript(meetingId)
         if (runId !== pollRunIdRef.current) return
-
-        const nextStatus = String(statusResponse.status ?? 'UNKNOWN').toUpperCase()
-        setProcessingStatus(nextStatus)
-
-        if (nextStatus === 'DONE') {
-          try {
-            const result = await getProcessingAnalysis(meetingId)
-            if (runId !== pollRunIdRef.current) return
-            setAnalysis(result)
-            addProcessedMeeting(meetingId, meetingTitle)
-            showToast('Xử lý hoàn tất. Đã tải kết quả phân tích.')
-          } catch (error) {
-            showToast('Xử lý hoàn tất nhưng chưa tải được phân tích. Hãy thử lại.')
-          }
-          return
-        }
-
-        if (nextStatus === 'FAILED') {
-          const errorText = typeof statusResponse.error === 'string'
-            ? statusResponse.error
-            : 'Xử lý thất bại. Vui lòng thử lại.'
-          showToast(errorText)
-          return
-        }
+        setTranscript(transcriptResult)
       } catch (error) {
+        console.error('Transcript polling error', error)
+      }
+
+      try {
+        setProcessingStatus('FETCHING_ANALYSIS')
+        const result = await getAnalysis(meetingId)
         if (runId !== pollRunIdRef.current) return
-        showToast('Không thể kiểm tra trạng thái xử lý.')
+        setAnalysis(result)
+        setProcessingStatus('DONE')
+        addProcessedMeeting(meetingId, meetingTitle)
+        showToast('Xử lý hoàn tất. Đã tải transcript + phân tích.')
         return
+      } catch (error) {
+        console.error('Analysis polling error', error)
       }
 
       await wait(3000)
     }
 
     if (runId === pollRunIdRef.current) {
+      setProcessingStatus('FAILED')
       showToast('Xử lý đang lâu hơn dự kiến, vui lòng chờ thêm.')
     }
   }, [addProcessedMeeting, showToast])
 
-  const handleUpload = useCallback(async (title: string, file: File) => {
+  const runProcessingFlow = useCallback(async (targetMeeting: Meeting) => {
     setBusy(true)
+    setAnalysis(null)
+    setTranscript(null)
+    setProcessingStatus('PROCESSING_AUDIO')
+
     try {
-      const result = await uploadMeeting(title, file)
-      setMeeting(result)
-      setAnalysis(null)
-      setProcessingStatus('PENDING')
-      await startProcessing(result.id)
-      showToast(`Đã tải lên và bắt đầu xử lý: ${result.title}`)
-      void pollProcessingUntilDone(result.id, result.title)
+      await processAudio({
+        meeting_id: targetMeeting.id,
+        audio_path: targetMeeting.audioPath,
+        language: 'vi',
+      })
+
+      showToast(`Đã gửi xử lý tới ${API_BASE} cho meeting #${targetMeeting.id}`)
+      setProcessingStatus('RUNNING')
+      await pollProcessingUntilDone(targetMeeting.id, targetMeeting.title)
     } catch (error) {
+      console.error('Process API error', error)
       setProcessingStatus('FAILED')
-      showToast('Không thể tải file hoặc bắt đầu xử lý. Vui lòng thử lại.')
+      showToast(`Gọi API thất bại: ${getErrorMessage(error)}`)
     } finally {
       setBusy(false)
     }
   }, [pollProcessingUntilDone, showToast])
+
+  const handleUpload = useCallback(async (title: string, file: File) => {
+    setBusy(true)
+
+    let uploadedPath = ''
+    try {
+      const uploadResult = await uploadAudio(file)
+      uploadedPath = uploadResult.audio_path
+    } catch (error) {
+      console.error('Upload audio error', error)
+      showToast(`Tải file lên backend thất bại: ${getErrorMessage(error)}`)
+      setBusy(false)
+      return
+    } finally {
+      setBusy(false)
+    }
+
+    const nextMeeting: Meeting = {
+      id: Math.floor(Date.now() / 1000) + Math.floor(Math.random() * 1000),
+      title,
+      audioPath: uploadedPath,
+      createdAt: new Date().toISOString(),
+    }
+
+    setMeeting(nextMeeting)
+    setFeatureScene('analysis')
+    await runProcessingFlow(nextMeeting)
+  }, [runProcessingFlow, showToast])
 
   const handleStartProcessing = useCallback(async () => {
     if (!meeting?.id) {
@@ -294,20 +249,8 @@ export default function App() {
       return
     }
 
-    setBusy(true)
-    try {
-      setAnalysis(null)
-      setProcessingStatus('PENDING')
-      await startProcessing(meeting.id)
-      showToast('Đã bắt đầu xử lý ghi âm.')
-      void pollProcessingUntilDone(meeting.id, meeting.title)
-    } catch (error) {
-      setProcessingStatus('FAILED')
-      showToast('Không thể bắt đầu xử lý. Vui lòng thử lại.')
-    } finally {
-      setBusy(false)
-    }
-  }, [meeting, pollProcessingUntilDone, showToast])
+    await runProcessingFlow(meeting)
+  }, [meeting, runProcessingFlow, showToast])
 
   const handleLoadAnalysis = useCallback(async () => {
     if (!meeting?.id) {
@@ -315,45 +258,60 @@ export default function App() {
       return
     }
 
-    if (processingStatus === 'PENDING' || processingStatus === 'RUNNING') {
+    if (
+      processingStatus === 'RUNNING' ||
+      processingStatus === 'PROCESSING_AUDIO' ||
+      processingStatus === 'FETCHING_TRANSCRIPT' ||
+      processingStatus === 'FETCHING_ANALYSIS'
+    ) {
       showToast('Dữ liệu đang được xử lý. Hệ thống sẽ tự cập nhật khi hoàn tất.')
       return
     }
 
     setBusy(true)
+    let transcriptLoaded = false
+    let analysisLoaded = false
+
     try {
-      const result = await getProcessingAnalysis(meeting.id)
-      setAnalysis(result)
-      showToast('Đã tải kết quả phân tích.')
-    } catch (error) {
-      showToast('Chưa có dữ liệu phân tích. Thử xử lý âm thanh trước.')
+      setProcessingStatus('FETCHING_TRANSCRIPT')
+      try {
+        const transcriptResult = await getTranscript(meeting.id)
+        setTranscript(transcriptResult)
+        transcriptLoaded = true
+      } catch (error) {
+        console.error('Load transcript error', error)
+      }
+
+      setProcessingStatus('FETCHING_ANALYSIS')
+      try {
+        const result = await getAnalysis(meeting.id)
+        setAnalysis(result)
+        analysisLoaded = true
+      } catch (error) {
+        console.error('Load analysis error', error)
+      }
+
+      if (analysisLoaded) {
+        setProcessingStatus('DONE')
+      } else if (transcriptLoaded) {
+        setProcessingStatus('FETCHING_ANALYSIS')
+      } else {
+        setProcessingStatus('FAILED')
+      }
+
+      if (transcriptLoaded && analysisLoaded) {
+        showToast('Đã tải transcript + kết quả phân tích.')
+      } else if (transcriptLoaded) {
+        showToast('Đã tải full transcript. Phân tích AI chưa sẵn sàng.')
+      } else if (analysisLoaded) {
+        showToast('Đã tải phân tích AI. Transcript chưa sẵn sàng.')
+      } else {
+        showToast('Chưa lấy được transcript và phân tích, vui lòng thử lại.')
+      }
     } finally {
       setBusy(false)
     }
-  }, [meeting, showToast])
-
-  const askAssistant = useCallback(async (message: string) => {
-    const query = message.trim()
-    if (!meeting?.id) {
-      return 'Bạn cần tải file ghi âm để tôi tạo phân tích và mindmap.'
-    }
-
-    if (processingStatus === 'PENDING' || processingStatus === 'RUNNING') {
-      return `Hệ thống đang xử lý ghi âm (trạng thái: ${processingStatus}). Tôi sẽ trả lời chi tiết ngay khi có phân tích.`
-    }
-
-    const current = analysis ?? await getProcessingAnalysis(meeting.id)
-    if (!analysis) {
-      setAnalysis(current)
-    }
-    const keywords = current.keywords.slice(0, 5).join(', ')
-    const actions = current.action_items.slice(0, 2)
-    const actionText = actions.length
-      ? actions.map((item) => `- ${item.task}`).join('\n')
-      : '- Không có hành động nổi bật.'
-
-    return `Câu hỏi: ${query}\n\nTóm tắt: ${current.summary}\n\nTừ khóa: ${keywords}\n\nViệc cần làm:\n${actionText}`
-  }, [analysis, meeting, processingStatus])
+  }, [meeting, processingStatus, showToast])
 
   const renderFeatureScene = () => {
     if (featureScene === 'analysis') {
@@ -363,6 +321,7 @@ export default function App() {
           meetingTitle={meeting?.title}
           busy={busy}
           analysis={analysis}
+          transcript={transcript}
           processingStatus={processingStatus}
           processedMeetings={processedMeetings}
           onStartProcessing={handleStartProcessing}
@@ -371,16 +330,8 @@ export default function App() {
       )
     }
 
-    if (featureScene === 'mindmap') {
-      return (
-        <FeatureMindmap
-          analysis={analysis}
-          onLoadAnalysis={handleLoadAnalysis}
-          busy={busy}
-          meetingId={meeting?.id}
-        />
-      )
-    }
+    if (featureScene === 'files') return <FilesList />
+    if (featureScene === 'subjects') return <SubjectsList />
 
     return <FeatureUpload disabled={busy} onUpload={handleUpload} />
   }
@@ -390,52 +341,44 @@ export default function App() {
     'cuộc họp hoặc văn bản, giúp bạn nắm ý chính nhanh chóng và học tập hiệu quả hơn.'
   ), [])
 
+  const openFeatureUploadFlow = useCallback(() => {
+    setActiveNav('Tính năng')
+    setFeatureScene('upload')
+  }, [])
+
+  const guestIsNews = activeNav === 'Tin tức'
+
   return (
-    <div className={`app ${user ? '' : 'app--guest'}`}>
-      <TopNav
-        user={user}
-        onLogout={handleLogout}
-        onTry={() => setShowLogin(true)}
-        isGuest={!user}
-        activeNav={activeNav}
-        onNavChange={setActiveNav}
-      />
+    <div className={`app ${user ? '' : 'app--guest'} ${user && activeNav === 'Tính năng' ? 'app--dashboard' : ''}`}>
+      {!(user && activeNav === 'Tính năng') && (
+        <TopNav
+          user={user}
+          onLogout={handleLogout}
+          onTry={() => setShowLogin(true)}
+          isGuest={!user}
+          activeNav={activeNav}
+          onNavChange={setActiveNav}
+        />
+      )}
 
       {user ? (
-        <main className="page">
-          {activeNav === 'Tính năng' ? (
-            <>
-              <section className="feature-tabs" aria-label="Feature scenes">
-                <button
-                  type="button"
-                  className={`feature-tab ${featureScene === 'upload' ? 'feature-tab--active' : ''}`}
-                  onClick={() => setFeatureScene('upload')}
-                >
-                  Tải file âm thanh
-                </button>
-                <button
-                  type="button"
-                  className={`feature-tab ${featureScene === 'analysis' ? 'feature-tab--active' : ''}`}
-                  onClick={() => setFeatureScene('analysis')}
-                >
-                  Phân tích âm thanh
-                </button>
-                <button
-                  type="button"
-                  className={`feature-tab ${featureScene === 'mindmap' ? 'feature-tab--active' : ''}`}
-                  onClick={() => setFeatureScene('mindmap')}
-                >
-                  Mindmap
-                </button>
-              </section>
-              {renderFeatureScene()}
-            </>
-          ) : activeNav === 'Tin tức' ? (
-            <NewsAbout />
-          ) : (
-            <>
-              <section className="hero">
-                <div className="hero__search">
+        activeNav === 'Tính năng' ? (
+          <DashboardLayout 
+            user={user} 
+            onLogout={handleLogout}
+            activeMenu={featureScene}
+            onNavigate={(scene) => setFeatureScene(scene)}
+          >
+            {renderFeatureScene()}
+          </DashboardLayout>
+        ) : (
+          <main className="page">
+            {activeNav === 'Tin tức' ? (
+              <NewsAbout />
+            ) : (
+              <>
+                <section className="hero">
+                  <div className="hero__search">
                   <input
                     className="search-input"
                     type="search"
@@ -447,28 +390,10 @@ export default function App() {
                   <h1>Cách mạng hóa quy trình học bài</h1>
                   <p>{heroSubtitle}</p>
                 </div>
+                <button className="hero__cta" type="button" onClick={openFeatureUploadFlow}>
+                  Tải file/Phân tích
+                </button>
                 <HeroChart />
-              </section>
-
-              <section className="workspace">
-                <Sidebar
-                  meetingTitle={meeting?.title}
-                  meetingId={meeting?.id}
-                />
-
-                <div className="workspace__main">
-                  <QuickActions
-                    disabled={busy}
-                    onUpload={handleUpload}
-                    onStartProcessing={handleStartProcessing}
-                    meetingReady={Boolean(meeting?.id)}
-                  />
-                  <AiAssistant
-                    busy={busy}
-                    onAsk={askAssistant}
-                    meetingId={meeting?.id}
-                  />
-                </div>
               </section>
             </>
           )}
@@ -484,7 +409,7 @@ export default function App() {
             <span className="search-icon">⌕</span>
           </div>
           <div className="guest__content">
-            <h1>Về chúng tôi</h1>
+            <h1>{guestIsNews ? 'Về chúng tôi' : 'Cách mạng hóa quy trình học bài'}</h1>
             <p>
               Chào mừng bạn đến với <span className="guest__brand">MIND</span> - nền tảng AI giúp
               ghi âm và tóm tắt bài giảng hoặc cuộc họp thành văn bản để đọc. Thay vì phải nghe
@@ -494,8 +419,16 @@ export default function App() {
               dàng hơn. Nền tảng có thể sử dụng cho học online, lớp học trực tiếp hoặc các cuộc
               họp, giúp việc học và làm việc trở nên nhanh chóng và hiệu quả hơn.
             </p>
-            <button className="guest__cta" type="button" onClick={() => setShowLogin(true)}>
-              Dùng thử
+            <button
+              className="guest__cta"
+              type="button"
+              onClick={() => {
+                setShowLogin(true)
+                setActiveNav('Tính năng')
+                setFeatureScene('upload')
+              }}
+            >
+              {guestIsNews ? 'Xem thêm' : 'Tải file/Phân tích'}
             </button>
           </div>
         </main>
